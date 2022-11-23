@@ -3,10 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/gorilla/mux"
+	"github.com/golang-jwt/jwt/v4"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+
+	"github.com/gorilla/mux"
 )
 
 type APIServer struct {
@@ -75,10 +78,18 @@ func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewDecoder(r.Body).Decode(createAccountReq); err != nil {
 		return err
 	}
+
 	account := NewAccount(createAccountReq.FirstName, createAccountReq.LastName)
 	if err := s.store.CreateAccount(account); err != nil {
 		return err
 	}
+
+	tokenString, err := createJWT(account)
+	if err != nil {
+		return err
+	}
+	fmt.Println("JWT Token: ", tokenString)
+
 	return WriteJSON(w, http.StatusOK, createAccountReq)
 }
 
@@ -109,12 +120,48 @@ func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+func createJWT(account *Account) (string, error) {
+	claims := &jwt.MapClaims{
+		"expiresAt":     15000,
+		"accountNumber": account.Number,
+	}
+
+	secret := os.Getenv("JWT_SECRET")
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+
+	return token.SignedString(secret)
+
+}
+
 func withJWTAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("Calling JWT Auth middleware")
+
+		tokenString := r.Header.Get("x-jwt-token")
+
+		_, err := validateJWT(tokenString)
+		if err != nil {
+			WriteJSON(w, http.StatusForbidden, ApiError{Error: "Invalid Token"})
+			return
+		}
+
 		handlerFunc(w, r)
 	}
+}
+
+func validateJWT(tokenString string) (*jwt.Token, error) {
+	secret := os.Getenv("JWT_SECRET")
+
+	return jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("Unespected signing Method: %v ", token.Header["alg"])
+		}
+
+		return []byte(secret), nil
+	})
+
 }
 
 type apiFunc func(http.ResponseWriter, *http.Request) error
