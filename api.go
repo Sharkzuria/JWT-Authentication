@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/golang-jwt/jwt/v4"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -109,7 +110,12 @@ func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error
 	if err := json.NewDecoder(r.Body).Decode(transferReq); err != nil {
 		return err
 	}
-	defer r.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(r.Body)
 
 	return WriteJSON(w, http.StatusOK, transferReq)
 }
@@ -142,20 +148,19 @@ func withJWTAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 		fmt.Println("Calling JWT Auth middleware")
 
 		tokenString := r.Header.Get("x-jwt-token")
-
 		token, err := validateJWT(tokenString)
+
 		if err != nil {
 			WriteJSON(w, http.StatusForbidden, ApiError{Error: "Invalid Token"})
 			return
 		}
 
 		if !token.Valid {
-
 			WriteJSON(w, http.StatusForbidden, ApiError{Error: "Invalid Token"})
 			return
 
 		}
-
+		account, err := store.GetUserByJWT(token)
 		//userID := getID(r)
 		//account, err
 		claims := token.Claims.(jwt.MapClaims)
