@@ -27,8 +27,9 @@ func NewAPIServer(listenAddr string, store Storage) *APIServer {
 
 func (s *APIServer) Run() {
 	router := mux.NewRouter()
+
 	router.HandleFunc("/account", makeHTTPHandleFunc(s.handleAccount))
-	router.HandleFunc("/account/{id}", withJWTAuth(makeHTTPHandleFunc(s.handleGetAccountByID)))
+	router.HandleFunc("/account/{id}", withJWTAuth(makeHTTPHandleFunc(s.handleGetAccountByID), s.store))
 	router.HandleFunc("/transfer", makeHTTPHandleFunc(s.handleTransfer))
 
 	log.Println("JSON Api Server runnning on port: ", s.listenAddr)
@@ -139,10 +140,14 @@ func createJWT(account *Account) (string, error) {
 
 }
 
-//
-//eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50TnVtYmVyIjo0OTgwODEsImV4cGlyZXNBdCI6MTUwMDB9.TdQ907o9yhUI2KU0TngrqO-xbfNgHAfZI6Jngia15UE
+func permissionDenied(w http.ResponseWriter) {
+	WriteJSON(w, http.StatusForbidden, ApiError{Error: "permission denied"})
+}
 
-func withJWTAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
+//
+//eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50TnVtYmVyIjo0OTgwODEsImV4cGlyZXNBdCI6MTUwMDB9.yHvaXox2WOQ1vWJ6dBsgjs7EkZbjr4TwmCqkRZ509Zo
+
+func withJWTAuth(handlerFunc http.HandlerFunc, s Storage) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("Calling JWT Auth middleware")
@@ -151,20 +156,32 @@ func withJWTAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 		token, err := validateJWT(tokenString)
 
 		if err != nil {
-			WriteJSON(w, http.StatusForbidden, ApiError{Error: "Invalid Token"})
+			permissionDenied(w)
 			return
 		}
 
 		if !token.Valid {
-			WriteJSON(w, http.StatusForbidden, ApiError{Error: "Invalid Token"})
+			permissionDenied(w)
 			return
-
 		}
-		account, err := store.GetUserByJWT(token)
-		//userID := getID(r)
-		//account, err
+
+		userID, err := getID(r)
+		if err != nil {
+			permissionDenied(w)
+			return
+		}
+
+		account, err := s.GetAccountByID(userID)
+		if err != nil {
+			permissionDenied(w)
+			return
+		}
+
 		claims := token.Claims.(jwt.MapClaims)
-		fmt.Println(claims)
+		if account.Number != int64(claims["accountNumber"].(float64)) {
+			WriteJSON(w, http.StatusForbidden, ApiError{Error: "invalid Token"})
+			return
+		}
 		handlerFunc(w, r)
 	}
 }
